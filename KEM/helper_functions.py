@@ -7,6 +7,23 @@ from secrets import token_bytes as random_bytes
 
 q = 3329
 
+class XOF:
+  def __init__(self, seed, strength=256):
+    self.strength = min(strength, 256)
+    self.generator = seed
+    self.state = b""
+
+  def __getitem__(self, i):
+    while i >= len(self.state):
+      self.extend_state()
+    return self.state[i]
+
+  def extend_state(self):
+    s = hashlib.shake_256(self.generator).digest(self.strength*2 + 32)
+    self.state += s[:-32]
+    self.generator = s[-32:]
+
+
 def samplePolyCBD(n, B=None, q=3329):
   if B is None:
     B = random_bytes(64*n)
@@ -42,7 +59,7 @@ def mod_ud(a, m):
   return b
 
 def xof(p, i, j):
-  return hashlib.shake_128(p + l2b(i) + l2b(j))
+  return XOF(p + l2b(i) + l2b(j))
 
 def hashH(s):
   return hashlib.sha3_256(s).digest()

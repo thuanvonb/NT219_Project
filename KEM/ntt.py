@@ -1,4 +1,4 @@
-from helper_functions import bytes2Bits, bitRev
+from helper_functions import bytes2Bits, bitRev, XOF
 from secrets import token_bytes as random_bytes
 from Crypto.Util.number import bytes_to_long as b2l
 
@@ -12,7 +12,7 @@ def baseCaseMultiply(a0, a1, b0, b1, g):
   return (c0 % q, c1 % q)
 
 def sampleNTT(hashgen=None):
-  B = hashgen.digest(1500) if hashgen is not None else random_bytes(1500)
+  B = hashgen if hashgen is not None else XOF(random_bytes(32))
   i = 0
   j = 0
   a = []
@@ -27,7 +27,6 @@ def sampleNTT(hashgen=None):
       j += 1
 
     i += 3
-    assert i < len(B)
   return a
 
 
