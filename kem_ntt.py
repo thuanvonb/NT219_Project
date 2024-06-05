@@ -1,4 +1,4 @@
-from helper_functions import bytes2Bits, bitRev, XOF
+from kem_helper import bytes2Bits, bitRev, XOF
 from secrets import token_bytes as random_bytes
 from Crypto.Util.number import bytes_to_long as b2l
 

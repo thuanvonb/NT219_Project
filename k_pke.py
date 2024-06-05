@@ -1,5 +1,5 @@
-from helper_functions import *
-from ntt import *
+from kem_helper import *
+from kem_ntt import *
 from secrets import token_bytes as random_bytes
 from Crypto.Util.Padding import pad, unpad
 from json import dumps

@@ -1,4 +1,4 @@
-from helper_functions import *
+from dsa_helper import *
 from secrets import token_bytes as random_bytes
 from Crypto.Util.number import bytes_to_long as b2l
 

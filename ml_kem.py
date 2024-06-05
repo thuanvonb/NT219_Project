@@ -3,7 +3,7 @@ sys.path.insert(1, 'KEM')
 
 from secrets import token_bytes as random_bytes
 from k_pke import K_PKE
-from helper_functions import *
+from kem_helper import *
 
 params = {
   "ML-KEM-512": {
@@ -82,7 +82,7 @@ class ML_KEM:
     return (True, K_out)
 
 def main():
-  mlkem = ML_KEM(**params['ML-KEM-768'])
+  mlkem = ML_KEM(**params['ML-KEM-1024'])
   ek, dk = mlkem.genKey()
   print("Encapsulation key:", ek.hex())
 

@@ -1,10 +1,10 @@
 import sys
-sys.path.insert(1, 'DSA')
-
 from secrets import token_bytes as random_bytes
 from hashlib import shake_256, md5, sha3_512
-from helper_functions import *
-from ntt import *
+from dsa_helper import *
+from dsa_ntt import *
+import argparse
+from base64 import encodebytes, b64decode
 
 q = 8380417
 d = 13
@@ -116,15 +116,156 @@ class ML_DSA:
       sum([sum(hi) for hi in h]) <= self.omega
     ])
 
+def pemEncode(data, name):
+  head = f"----- BEGIN {name} -----\n"
+  tail = f"----- END {name} -----\n"
+  return head.encode() + encodebytes(data) + tail.encode()
+
+def pemDecode(data):
+  data = data.decode()
+  data = ''.join(data.strip().split('\n')[1:-1])
+  return b64decode(data)
+
+def keygen(mldsa, publicKey, secretKey):
+  pk, sk = mldsa.genKey()
+
+  if publicKey.endswith(".pem"):
+    pk = pemEncode(pk, "MLDSA PUBLIC KEY")
+
+  if secretKey.endswith(".pem"):
+    sk = pemEncode(sk, "MLDSA SECRET KEY")    
+
+  with open(secretKey, 'wb') as f:
+    f.write(sk)
+  with open(publicKey, 'wb') as f:
+    f.write(pk)
+
+
+def sign(mldsa, secretKey, data, signatureFile):
+  sk = open(secretKey, 'rb').read()
+  if secretKey.endswith(".pem"):
+    sk = pemDecode(sk)
+
+  sig = None
+  try:
+    sig = mldsa.sign(sk, data)
+  except:
+    print("An error has occured", file=sys.stderr)
+    return False
+
+  if signatureFile.endswith(".pem"):
+    sig = pemEncode(sig, "MLDSA SIGNATURE")
+
+  with open(signatureFile, 'wb') as f:
+    f.write(sig)
+
+  return True
+
+
+def verify(mldsa, publicKey, data, signatureFile):
+  pk = open(publicKey, 'rb').read()
+  if publicKey.endswith(".pem"):
+    pk = pemDecode(pk)
+
+  sig = open(signatureFile, 'rb').read()
+  if signatureFile.endswith(".pem"):
+    sig = pemDecode(sig)
+
+  result = False
+  try:
+    result = mldsa.verify(pk, data, sig)
+  except:
+    print("An error has occured", file=sys.stderr)
+    return False
+
+  return result
+
+
+def readFromSTDIN():
+  print("No target specified, reading from STDIN instead. Use Ctrl+D to stop the input.", file=sys.stderr)
+  while True:
+    line = input().encode()
+    if b"\x04" in line:
+      data += line[:line.index(b"\x04")]
+      break
+    else:
+      data += line + b'\n'
+  return data
+
+
+def main():
+  parser = argparse.ArgumentParser(description="Python script for creating and signing with ML-DSA")
+  parser.add_argument("-p", "--params", help="Params set for ML-DSA: 44, 65, 87; coresponding to 128-bit, 192-bit, 256-bit security (resp); default: 65", default=65, type=int)
+  parser.add_argument("-m", "--mode", help="Mode of operation [keygen|sign|verify]", required=True)
+  parser.add_argument("--secret-key", help="Secret key path to store (keygen) or read (sign)", default=None)
+  parser.add_argument("--public-key", help="Public key path to store (keygen) or read (verify)", default=None)
+  parser.add_argument("--target-file", help="File used to sign (sign) or verify (verify); read from STDIN if not set", default=None)
+  parser.add_argument("--signature-file", help="Signature path to store (sign) or read (verify)", default=None)
+
+  args = parser.parse_args()
+  if args.params not in [44, 65, 87]:
+    print("Params set is either 44, 65 or 87", file=sys.stderr)
+    return
+
+  param_name = "ML-DSA-" + str(args.params)
+  mldsa = ML_DSA(**params[param_name])
+
+  if args.mode == "keygen":
+    if args.secret_key is None:
+      print("Require secret key path", file=sys.stderr)
+      return
+    if args.public_key is None:
+      print("Require public key path", file=sys.stderr)
+      return
+
+    keygen(mldsa, args.public_key, args.secret_key)
+
+  elif args.mode == "sign":
+    if args.secret_key is None:
+      print("Require secret key path", file=sys.stderr)
+      return
+    if args.signature_file is None:
+      print("Please specify where to store the signature", file=sys.stderr)
+      return
+
+    data = b""
+    if args.target_file is None:
+      data = readFromSTDIN()
+    else:
+      data = open(args.target_file, 'rb').read()
+
+    sign(mldsa, args.secret_key, data, args.signature_file)
+
+  elif args.mode == "verify":
+    if args.public_key is None:
+      print("Require public key path", file=sys.stderr)
+      return
+    if args.signature_file is None:
+      print("Please specify where to refer the signature", file=sys.stderr)
+      return
+
+    data = b""
+    if args.target_file is None:
+      data = readFromSTDIN()
+    else:
+      data = open(args.target_file, 'rb').read()
+
+    res = verify(mldsa, args.public_key, data, args.signature_file)
+    if res:
+      print("Accepted")
+    else:
+      print("Rejected")
+
 
 if __name__ == '__main__':
-  mldsa = ML_DSA(**params["ML-DSA-65"])
-  pk, sk = mldsa.genKey()
-  print("Public key:", pk.hex())
-  print("\nSecret key:", sk.hex())
+  # mldsa = ML_DSA(**params["ML-DSA-87"])
+  # pk, sk = mldsa.genKey()
+  # print("Public key:", pk.hex())
+  # print("\nSecret key:", sk.hex())
 
-  msg = random_bytes(64)
-  print("\nMessage:", msg.hex())
-  sig = mldsa.sign(sk, msg)
-  print("\nSignature:", sig.hex())
-  print("\nVerification:", mldsa.verify(pk, msg, sig))
+  # msg = random_bytes(64)
+  # print("\nMessage:", msg.hex())
+  # sig = mldsa.sign(sk, msg)
+  # print("\nSignature:", sig.hex())
+  # print("\nVerification:", mldsa.verify(pk, msg, sig))
+  main()
