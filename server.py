@@ -6,6 +6,14 @@ from hashlib import shake_256, sha384, md5, sha1
 from secrets import token_bytes
 from struct import pack
 from byte_stream import ByteStream
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Hash import HMAC, SHA3_384
+from kem_helper import XOF
+from time import sleep
+import threading
+import tkinter as tk
+from tkinter import messagebox
+import tkthread
 
 signature = "ML-DSA-65"
 hash_size = 384 // 8
@@ -34,6 +42,9 @@ def encode_selected_suite(mlkem, aes, server_random):
   data += bytes([mlkem, aes])
   return data
 
+def iv_at_idx(iv, id):
+  return iv[id:id+12]
+
 
 class Server:
   def __init__(self, listen_ip, port, priority_suite=None):
@@ -42,12 +53,17 @@ class Server:
     self.priority_suite = priority_suite
     self.mldsa = ML_DSA(**mldsa_params[signature])
     self.handshake_msg = b""
+    self.secured = False
+    self.connection = None
 
   def listen(self):
     self.connection = listen(port=self.port, bindaddr=self.listen_ip)
     self.connection.wait_for_connection()
     if not self.establish_secure_session():
       self.connection.close()
+      return False
+    self.secured = True
+    return True
 
   def receive_client_hello(self):
     client_hello, raw_data = ByteStream.recv(self.connection, 1, b"\0\0")
@@ -108,17 +124,20 @@ class Server:
 
 
   def generate_session_keys(self):
-    total_length = hash_size*2 + self.aes_keysize*2 + iv_size*2
+    total_length = hash_size*2 + self.aes_keysize*4 + iv_size*4
     key_block = ByteStream(shake_256(self.master_secret + b"key expansion" + self.server_random + self.client_random).digest(total_length))
-    self.client_mac_secret = key_block.extract(hash_size)
-    self.server_mac_secret = key_block.extract(hash_size)
+    self.client_mac_key = key_block.extract(hash_size)
+    self.server_mac_key = key_block.extract(hash_size)
+    client_msg_key = key_block.extract(self.aes_keysize)
+    server_msg_key = key_block.extract(self.aes_keysize)
     self.client_key = key_block.extract(self.aes_keysize)
     self.server_key = key_block.extract(self.aes_keysize)
-    self.client_iv = key_block.extract(iv_size)
-    self.server_iv = key_block.extract(iv_size)
-
-    self.aes_server = AES.new(self.server_key, AES.MODE_GCM, nonce=self.server_iv)
-    self.aes_client = AES.new(self.client_key, AES.MODE_GCM, nonce=self.client_iv)
+    self.client_iv = shake_256(key_block.extract(iv_size)).digest(65536+12)
+    self.server_iv = shake_256(key_block.extract(iv_size)).digest(65536+12)
+    self.client_final_iv = key_block.extract(iv_size)
+    self.server_final_iv = key_block.extract(iv_size)
+    self.aes_client_msg = AES.new(client_msg_key, AES.MODE_ECB)
+    self.aes_server_msg = AES.new(server_msg_key, AES.MODE_ECB)
 
 
   def receive_client_final_message(self):
@@ -131,7 +150,8 @@ class Server:
 
     ef, tag = data[:-16], data[-16:]
     try:
-      pt = self.aes_server.decrypt_and_verify(ef, tag)
+      aes_server = AES.new(self.server_key, AES.MODE_GCM, nonce=self.server_final_iv)
+      pt = aes_server.decrypt_and_verify(ef, tag)
     except ValueError:
       return False
 
@@ -153,14 +173,144 @@ class Server:
       return False
 
     final_msg = shake_256(self.master_secret + b"client finished" + md5(self.handshake_msg).digest() + sha1(self.handshake_msg).digest()).digest(16)
-    final_msg, tag = self.aes_client.encrypt_and_digest(final_msg)
+    aes_client = AES.new(self.client_key, AES.MODE_GCM, nonce=self.client_final_iv)
+    final_msg, tag = aes_client.encrypt_and_digest(final_msg)
     final_msg += tag
 
     self.connection.send(wrap_len(final_msg + b"\0\0\0\0", 0x14))
     print("Secure session established")
     return True
 
+  def decrypt_message(self, enc):
+    emid = enc[:16]
+    hmac = enc[16:64]
+    emsg = enc[64:-16]
+    tag = enc[-16:]
 
+    h = HMAC.new(self.server_mac_key, digestmod=SHA3_384)
+    h.update(emid)
+    try:
+      h.verify(hmac)
+    except:
+      return False
+    mid = self.aes_server_msg.decrypt(emid)
+    message_id = int(mid[:2].hex(), 16)
+    aes = AES.new(self.server_key, AES.MODE_GCM, nonce=iv_at_idx(self.server_iv, message_id))
+    msg = ""
+    try:
+      pt = aes.decrypt_and_verify(emsg, tag)
+      msg = unpad(pt, 16).decode()
+    except:
+      return False
+    return msg
+
+  def close(self):
+    self.connection.close()
+
+  def encrypt_message(self, msg):
+    mid = token_bytes(16)
+    message_id = int(mid[:2].hex(), 16)
+    emid = self.aes_client_msg.encrypt(mid)
+    h = HMAC.new(self.client_mac_key, digestmod=SHA3_384)
+    h.update(emid)
+    emid += h.digest()
+    aes = AES.new(self.client_key, AES.MODE_GCM, nonce=iv_at_idx(self.client_iv, message_id))
+    emsg, tag = aes.encrypt_and_digest(pad(msg.encode(), 16))
+    return emid + emsg + tag
+
+  def send_msg(self, msg):
+    self.connection.send(wrap_len(msg + b'\0\0\0\0', 0xd0))
+
+  def can_recv(self):
+    if self.connection is None:
+      return False
+    return self.connection.can_recv()
+
+  def recv_msg(self):
+    msg, data = ByteStream.recv(self.connection, 0xd0, b'\0\0\0\0')
+    return msg.data
+
+
+class UI(tk.Frame):
+  def __init__(self, master=None):
+    super().__init__(master, bg=None)
+    self.master = master
+    self.conn = None
+    self.connected = None
+    self.grid(column=0, row=0, sticky=(tk.N, tk.S, tk.W, tk.E))
+    self.text = tk.Text(self, bg=None, height=1, width=69)
+    self.text.grid(column=0, row=1, columnspan=2, padx=5)
+    self.text.bind("<Return>", self.send_message)
+    self.btn2 = tk.Button(self, text="Send", command=self.send_message)
+    self.btn2.grid(column=2, row=1)
+    self.messages = tk.Listbox(self, bg=None, height=20, width=100)
+    self.messages.grid(column=0, row=0, columnspan=3)
+    self.master.protocol("WM_DELETE_WINDOW", self.close)
+    self.exited = False
+
+  def close(self):
+    try:
+      self.conn.close()
+    except:
+      self.conn = 1
+
+    self.exited = True
+    self.connected = False
+    self.master.destroy()
+
+  def add_message(self, msg, whom):
+    self.messages.insert(tk.END, f"{whom}: {msg}")
+
+  def send_message(self, *args, **kwargs):
+    txt = self.text.get(1.0, "end-1c") 
+    self.text.delete("1.0", "end")
+    self.add_message(txt, "You")
+    if self.conn is None or not self.connected:
+      self.add_message("You haven't been connected by client", "Debug")
+    else:
+      enc = self.conn.encrypt_message(txt)
+      self.conn.send_msg(enc)
+
+
+def recv_message(app):
+  while not app.exited:
+    sleep(0.1)
+    if app.conn is None:
+      continue
+    if app.exited:
+      break
+
+    if app.conn.can_recv() and app.conn.secured:
+      data = app.conn.recv_msg()
+      msg = app.conn.decrypt_message(data)
+      if msg == False:
+        messagebox.showerror(title="Security error", message="Compromission attempt detected")
+        app.conn.close()
+        break
+
+      app.add_message(msg, "Other")
     
-server = Server("0.0.0.0", 4433, priority_suite=1)
-server.listen()
+
+def listener(ui):
+  while True:
+    ui.conn = server = Server("0.0.0.0", 4433, priority_suite=1)
+    ui.connected = server.listen()
+    if not ui.connected:
+      print("Client's connection failed")
+      continue
+    ui.master.title("Server - connected")
+    break
+
+
+# server = Server("0.0.0.0", 4433, priority_suite=1)
+# server.listen()
+if __name__ == '__main__':
+  root = tk.Tk()
+  root.title("Server")
+  root.resizable(False,False)
+  app = UI(root)
+  thread2 = threading.Thread(target=listener, args=(app,))
+  thread2.start()
+  thread = threading.Thread(target=recv_message, args=(app,))
+  thread.start()
+  app.mainloop()

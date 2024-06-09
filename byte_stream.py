@@ -10,6 +10,7 @@ class ByteStream:
     data = b""
     while len(data) < 5:
       data += receiver.recvuntil(ending_bytes)
+    print(data)
     if data[0] != id:
       return None, None
     l = unpack('<l', data[1:5])[0] + 1
