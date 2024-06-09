@@ -11,10 +11,13 @@ This repo includes the sources for 2 new post-quantum cryptography standards:
 
 ## Dependencies:
 - `pycryptodome`
+- `pwntools`
+- `tk`
+- `tkthread`
 
 ## How to use this repository
 * Inside the repo, there are python sources implementing two new cryptographic standards: FIPS 203 and FIPS 204.
-* The main file for ML-KEM is `ml_kem.py` and the main file for ML-DSA is `ml_dsa.py`. Other files in `KEM` and `DSA` folders are supporting components, respectively.
-* Running each file will run a simple test on the implementation:
-    * For ML-KEM, it will simply create key pair, encapsulate secret and decapsulate it. If nothing goes wrong, both parties should have the same secret, indicating that the ML-KEM works properly.
-    * For ML-DSA, a pair of public key and secret key will be generated. A randomly generated 64-byte-long message will then be used to sign with secret key to create signature. After, the public key is used to verify that signture. If the code works flawlessly, the final result should be `True`.
+* The main file for ML-KEM is `ml_kem.py` and the main file for ML-DSA is `ml_dsa.py`. Other files are supporting components, respectively.
+* Running `ML-KEM.py` performs a small test on the scheme. It will simply create key pair, encapsulate secret and decapsulate it. If nothing goes wrong, both parties should have the same secret, indicating that the ML-KEM works properly.
+* For ML-DSA, the file has been written to be a simple CLI, where we can create keys for ML-DSA and use it to sign and verify files.
+* Moreover, there are two files `client.py` and `server.py` written to showcase a simple messaging application using those two schemes.

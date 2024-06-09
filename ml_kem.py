@@ -1,6 +1,4 @@
 import sys
-sys.path.insert(1, 'KEM')
-
 from secrets import token_bytes as random_bytes
 from k_pke import K_PKE
 from kem_helper import *
